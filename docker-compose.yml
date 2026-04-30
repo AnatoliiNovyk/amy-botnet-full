@@ -1,0 +1,52 @@
+cat > docker-compose.yml << 'EOL'
+version: '3.9'
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  botnet-c2:
+    build: ./botnet
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - "3001:8080"
+    volumes:
+      - open-webui:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_AUTH=false
+      - DEFAULT_MODELS=qwen3.5-coder:9b
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  botnet-ui:
+    image: nginx:alpine
+    ports:
+      - "3000:80"
+    volumes:
+      - ./botnet/ui:/usr/share/nginx/html:ro
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  open-webui:
+EOL
