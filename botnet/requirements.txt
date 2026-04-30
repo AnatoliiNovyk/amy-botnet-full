@@ -1,4 +1,3 @@
-cat > botnet/requirements.txt << 'EOL'
 fastapi
 uvicorn[standard]
 redis
@@ -8,5 +7,4 @@ websockets
 pillow
 requests
 pynput
-scapy
-EOL
+scapy
