@@ -1,2 +1,24 @@
-node_modules/
+# PyInstaller & Build artifacts
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+
+# IDEs
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Environment
 .env
+venv/
+
+# Botnet specific (screenshots and logs)
+botnet/screenshots/*
+botnet/logs/*
+!botnet/screenshots/.gitkeep
+!botnet/logs/.gitkeep
