@@ -1,11 +1,11 @@
-version: '3.9'
+version: '3.8'
 
 services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
 
-  botnet-c2:
+  botnet:
     build: ./botnet
     ports:
       - "8000:8000"
@@ -32,7 +32,6 @@ services:
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - WEBUI_AUTH=false
-      - DEFAULT_MODELS=qwen3.5-coder:9b
     depends_on:
       - ollama
     restart: unless-stopped
