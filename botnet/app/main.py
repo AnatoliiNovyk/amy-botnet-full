@@ -66,10 +66,12 @@ def decrypt_message(encoded: str) -> str:
         return ""
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(user: str = Depends(get_current_user)):
-    if UI_PATH.exists():
-        return UI_PATH.read_text(encoding="utf-8")
-    return HTMLResponse(content="UI file not found. Check if 'ui/index.html' exists.", status_code=404)
+async def dashboard():
+    try:
+        with open("ui/index.html", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return HTMLResponse(content="<h1>index.html not found in ui/ folder</h1>", status_code=404)
 
 # Endpoint for the BOT to connect
 @app.websocket("/ws/{bot_id}")
