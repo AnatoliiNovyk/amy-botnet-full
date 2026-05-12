@@ -1,9 +1,5 @@
 fastapi
-uvicorn[standard]
-redis
-httpx
-python-multipart
+uvicorn
 websockets
-pillow
-requests
-
+pycryptodome
+jinja2

