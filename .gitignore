@@ -1,31 +1,10 @@
-# PyInstaller & Build artifacts
+__pycache__/
+*.pyc
+botnet/screenshots/*
+botnet/logs/*
+botnet/downloads/*
+botnet/stealer/*
 build/
 dist/
 *.spec
-__pycache__/
-*.pyc
-
-# IDEs
-.vscode/
-.idea/
-
-# OS files
-Thumbs.db
-Desktop.ini
-
-# Environment
 .env
-venv/
-
-# Botnet specific (screenshots and logs)
-botnet/screenshots/*
-botnet/logs/*
-!botnet/screenshots/.gitkeep
-!botnet/logs/.gitkeep
-
-# Docker
-.dockerignore
-
-# Python
-*.py[cod]
-*$py.class
