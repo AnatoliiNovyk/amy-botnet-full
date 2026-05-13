@@ -13,6 +13,13 @@ services:
       - redis
     environment:
       - REDIS_URL=redis://redis:6379/0
+    # Додаємо права рута, щоб докер міг писати на диск VPS
+    user: "0:0"
+    volumes:
+      - ./downloads:/app/downloads
+      - ./screenshots:/app/screenshots
+      - ./logs:/app/logs
+      - ./stealer:/app/stealer  # ОСЬ ЦЬОГО НЕ ВИСТАЧАЛО
     restart: unless-stopped
 
   ollama:
@@ -39,3 +46,4 @@ services:
 volumes:
   ollama_data:
   open-webui:
+
